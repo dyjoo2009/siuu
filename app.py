@@ -13,7 +13,7 @@ from sklearn.linear_model import LinearRegression
 # ==========================================
 
 st.set_page_config(
-    page_title="나이별 평균 공복혈당 예측기",
+    page_title="나이별 평균혈당 예측기",
     page_icon="🩸",
     layout="wide",
 )
@@ -25,7 +25,7 @@ DATA_URL = (
     "%EC%B0%B8%EC%A1%B0%ED%91%9C%EC%A4%80.csv"
 )
 
-st.title("🩸 나이별 평균 공복혈당 예측기")
+st.title("🩸 나이별 평균 혈당 예측기")
 st.write(
     "나이에 따른 혈당 참조값의 관계를 분석하고 "
     "선형회귀 모델로 추정합니다."
