@@ -1,4 +1,3 @@
-
 import re
 
 import numpy as np
@@ -56,9 +55,8 @@ except Exception as e:
     st.stop()
 
 
-# 필요한 열 확인
+# 필요한 열 확인 (지역은 분석 변수에서 제외하므로 필수 열이 아님)
 required_columns = [
-    "지역",
     "성별",
     "나이",
     "측정값 (mg/dL)",
@@ -141,30 +139,23 @@ if df.empty:
 
 
 # ==========================================
-# 4. 지역과 성별 선택
+# 4. 전국 자료 선택 + 성별 선택
 # ==========================================
+# 지역은 분석 변수에서 제외합니다.
+# 지역별 행과 '전국' 행이 함께 있으면 중복 집계가 되므로,
+# '전국' 행이 있으면 그것만 사용합니다.
+
+if "지역" in df.columns:
+    region_text = df["지역"].astype(str).str.strip()
+    national_mask = region_text == "전국"
+
+    if national_mask.any():
+        df = df[national_mask].copy()
 
 st.sidebar.header("분석 조건")
+st.sidebar.caption("전국 자료를 기준으로 분석합니다.")
 
-regions = sorted(df["지역"].dropna().unique().tolist())
-
-if not regions:
-    st.error("지역 데이터가 없습니다.")
-    st.stop()
-
-default_region = (
-    "전국" if "전국" in regions else regions[0]
-)
-
-selected_region = st.sidebar.selectbox(
-    "지역 선택",
-    regions,
-    index=regions.index(default_region),
-)
-
-region_df = df[df["지역"] == selected_region].copy()
-
-sexes = sorted(region_df["성별"].dropna().unique().tolist())
+sexes = sorted(df["성별"].dropna().astype(str).str.strip().unique().tolist())
 
 selected_sex = st.sidebar.selectbox(
     "성별 선택",
@@ -173,23 +164,23 @@ selected_sex = st.sidebar.selectbox(
 
 if selected_sex == "전체(남녀 가중평균)":
     # 이미 별도로 계산된 전체 행이 있다면 중복 집계를 피합니다.
-    sex_text = region_df["성별"].astype(str).str.strip()
+    sex_text = df["성별"].astype(str).str.strip()
     total_mask = sex_text.str.contains(
         r"전체|합계|계",
         regex=True,
     )
 
     if total_mask.any():
-        region_df = region_df[total_mask].copy()
+        analysis_df = df[total_mask].copy()
     else:
-        region_df = region_df.copy()
+        analysis_df = df.copy()
 else:
-    region_df = region_df[
-        region_df["성별"] == selected_sex
+    analysis_df = df[
+        df["성별"].astype(str).str.strip() == selected_sex
     ].copy()
 
 
-if region_df.empty:
+if analysis_df.empty:
     st.error("선택한 조건에 해당하는 데이터가 없습니다.")
     st.stop()
 
@@ -199,27 +190,28 @@ if region_df.empty:
 # ==========================================
 
 # 같은 연령대에 여러 행이 있으면 측정 인원수로 가중 평균
-age_data = (
-    region_df
-    .groupby(["나이", "대표 나이"], as_index=False)
-    .apply(
-        lambda group: pd.Series({
-            "혈당 참조값": np.average(
-                group["측정값 (mg/dL)"],
-                weights=group["측정 수 (명)"],
-            ),
-            "측정 인원": group["측정 수 (명)"].sum(),
-        }),
-        include_groups=False,
-    )
-    .reset_index(drop=True)
+analysis_df["가중합"] = (
+    analysis_df["측정값 (mg/dL)"] * analysis_df["측정 수 (명)"]
 )
+
+age_data = (
+    analysis_df
+    .groupby(["나이", "대표 나이"], as_index=False)
+    .agg(
+        가중합=("가중합", "sum"),
+        측정_인원=("측정 수 (명)", "sum"),
+    )
+)
+
+age_data["혈당 참조값"] = age_data["가중합"] / age_data["측정_인원"]
+age_data = age_data.rename(columns={"측정_인원": "측정 인원"})
+age_data = age_data[["나이", "대표 나이", "혈당 참조값", "측정 인원"]]
 
 age_data = age_data.dropna(
     subset=["대표 나이", "혈당 참조값"]
 )
 
-age_data = age_data.sort_values("대표 나이")
+age_data = age_data.sort_values("대표 나이").reset_index(drop=True)
 
 if len(age_data) < 2:
     st.error("회귀분석을 하려면 서로 다른 연령대가 2개 이상 필요합니다.")
@@ -244,8 +236,6 @@ model.fit(
 
 slope = float(model.coef_[0])
 intercept = float(model.intercept_)
-
-predicted = model.predict(X)
 
 # 피어슨 상관계수
 correlation = age_data["대표 나이"].corr(
@@ -495,5 +485,6 @@ st.caption(
     "주의: 상관관계는 인과관계를 의미하지 않습니다. "
     "이 모델은 연령대별 집단 자료를 이용한 추정이며, "
     "개인의 실제 혈당이나 공복혈당을 진단하는 도구가 아닙니다. "
+    "지역은 분석 변수에서 제외했으며, 전국 자료를 기준으로 합니다. "
     "75세 이상 연령대의 대표 나이는 77.5세로 근사했습니다."
 )
