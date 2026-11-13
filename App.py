@@ -1,20 +1,24 @@
-import re
 
+import re
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
 from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 
 # ==========================================
-# 1. 기본 설정
+# 1. 페이지 기본 설정
 # ==========================================
 
 st.set_page_config(
-    page_title="나이별 평균혈당 예측기",
-    page_icon="🩸",
+    page_title="BIO-GLUCOSE LAB",
+    page_icon="🧬",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 DATA_URL = (
@@ -24,73 +28,182 @@ DATA_URL = (
     "%EC%B0%B8%EC%A1%B0%ED%91%9C%EC%A4%80.csv"
 )
 
-st.title("🩸 나이별 평균 혈당 예측기")
-st.write(
-    "나이에 따른 혈당 참조값의 관계를 분석하고 "
-    "선형회귀 모델로 추정합니다."
-)
 
-st.warning(
-    "자료의 측정 항목은 '한국인의 혈당 농도'입니다. "
-    "공복 상태에서 측정한 자료인지는 확인되지 않았으므로 "
-    "결과는 공복혈당이 아닌 혈당 참조값의 추정치로 해석해야 합니다."
-)
+# ==========================================
+# 2. 디자인 CSS
+# ==========================================
+
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Pretendard', sans-serif;
+    }
+
+    .stApp {
+        background-color: #F3F7FA;
+    }
+
+    .main .block-container {
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+        max-width: 1450px;
+    }
+
+    .hero {
+        background: linear-gradient(120deg, #102D46, #176B72);
+        padding: 32px;
+        border-radius: 20px;
+        color: white;
+        margin-bottom: 25px;
+    }
+
+    .hero h1 {
+        color: white;
+        font-size: 32px;
+        font-weight: 800;
+        margin-bottom: 8px;
+    }
+
+    .hero p {
+        color: #D5E9EC;
+        font-size: 15px;
+        margin: 0;
+    }
+
+    .section-title {
+        color: #153D52;
+        font-size: 21px;
+        font-weight: 800;
+        margin-top: 25px;
+        margin-bottom: 12px;
+    }
+
+    .info-card {
+        background: white;
+        padding: 20px;
+        border-radius: 15px;
+        border: 1px solid #E2EBF0;
+        box-shadow: 0 3px 12px rgba(20,50,70,0.04);
+    }
+
+    .small-label {
+        color: #718596;
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    .big-number {
+        color: #176B72;
+        font-size: 29px;
+        font-weight: 800;
+    }
+
+    .notice {
+        background: #E8F4F5;
+        color: #205A61;
+        padding: 15px;
+        border-radius: 12px;
+        font-size: 13px;
+        line-height: 1.7;
+    }
+
+    [data-testid="stSidebar"] {
+        background-color: #EAF1F5;
+    }
+
+    div[data-testid="stMetric"] {
+        background: white;
+        padding: 17px;
+        border-radius: 14px;
+        border: 1px solid #E2EBF0;
+    }
+
+    h2, h3 {
+        color: #153D52;
+    }
+
+</style>
+""", unsafe_allow_html=True)
 
 
 # ==========================================
-# 2. 데이터 불러오기
+# 3. 제목
+# ==========================================
+
+st.markdown("""
+<div class="hero">
+    <div style="font-size:14px; letter-spacing:3px;">
+        BIOCHEMISTRY · DATA SCIENCE · HEALTH
+    </div>
+    <h1>🧬 BIO-GLUCOSE LAB</h1>
+    <p>한국인 연령·성별별 혈당 참조값 분석 및 예측 시스템</p>
+    <p style="margin-top:14px;">
+        AGE & GENDER BASED GLUCOSE REFERENCE PREDICTION
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="notice">
+    <b>연구 안내</b><br>
+    본 프로그램은 한국인 혈당 참조표준의 집단별 자료를 이용하여
+    연령과 성별에 따른 혈당 참조값을 분석하고 추정합니다.
+    개인의 실제 혈당이나 당뇨병 여부를 진단하는 의료기기가 아닙니다.
+    또한 원자료의 공복 여부는 확인되지 않았습니다.
+</div>
+""", unsafe_allow_html=True)
+
+
+# ==========================================
+# 4. 데이터 불러오기
 # ==========================================
 
 @st.cache_data
 def load_data():
+
     data = pd.read_csv(DATA_URL, encoding="utf-8")
+
     data.columns = data.columns.astype(str).str.strip()
+
     return data
 
 
 try:
     df = load_data()
+
 except Exception as e:
     st.error(f"데이터를 불러오지 못했습니다: {e}")
     st.stop()
 
 
-# 필요한 열 확인 (지역은 분석 변수에서 제외하므로 필수 열이 아님)
 required_columns = [
+    "지역",
     "성별",
     "나이",
     "측정값 (mg/dL)",
     "측정 수 (명)",
 ]
 
-missing_columns = [
+missing = [
     col for col in required_columns
     if col not in df.columns
 ]
 
-if missing_columns:
-    st.error(
-        "CSV에서 필요한 열을 찾지 못했습니다: "
-        + ", ".join(missing_columns)
-    )
-    st.write("실제 CSV 열 이름:", df.columns.tolist())
+if missing:
+    st.error("필요한 컬럼이 없습니다: " + ", ".join(missing))
     st.stop()
 
 
 # ==========================================
-# 3. 데이터 전처리
+# 5. 데이터 전처리
 # ==========================================
 
 def convert_age(value):
-    """
-    연령대 문자열을 대표 나이로 변환합니다.
-
-    20~24 세 -> 22
-    25~26 세 -> 25.5
-    75세 이상 -> 77.5 (근사값)
-    """
 
     text = str(value).replace(" ", "")
+
     numbers = re.findall(r"\d+(?:\.\d+)?", text)
 
     if not numbers:
@@ -110,381 +223,91 @@ def convert_age(value):
 df["대표 나이"] = df["나이"].apply(convert_age)
 
 df["측정값 (mg/dL)"] = pd.to_numeric(
-    df["측정값 (mg/dL)"]
-    .astype(str)
-    .str.replace(",", "", regex=False),
+    df["측정값 (mg/dL)"].astype(str).str.replace(",", ""),
     errors="coerce",
 )
 
 df["측정 수 (명)"] = pd.to_numeric(
-    df["측정 수 (명)"]
-    .astype(str)
-    .str.replace(",", "", regex=False),
+    df["측정 수 (명)"].astype(str).str.replace(",", ""),
     errors="coerce",
 )
+
+df["성별"] = df["성별"].astype(str).str.strip()
+df["지역"] = df["지역"].astype(str).str.strip()
+
 
 df = df.dropna(
     subset=[
         "대표 나이",
         "측정값 (mg/dL)",
         "측정 수 (명)",
+        "성별",
     ]
 )
 
 df = df[df["측정 수 (명)"] > 0]
 
-if df.empty:
-    st.error("분석할 수 있는 데이터가 없습니다.")
+
+# 전국 데이터 선택
+national_mask = df["지역"] == "전국"
+
+if national_mask.any():
+
+    df = df[national_mask].copy()
+
+else:
+
+    st.error(
+        "CSV에서 전국 자료를 찾지 못했습니다. "
+        "지역별 자료를 임의로 합치지 않도록 분석을 중단합니다."
+    )
     st.stop()
 
 
-# ==========================================
-# 4. 전국 자료 선택 + 성별 선택
-# ==========================================
-# 지역은 분석 변수에서 제외합니다.
-# 지역별 행과 '전국' 행이 함께 있으면 중복 집계가 되므로,
-# '전국' 행이 있으면 그것만 사용합니다.
-
-if "지역" in df.columns:
-    region_text = df["지역"].astype(str).str.strip()
-    national_mask = region_text == "전국"
-
-    if national_mask.any():
-        df = df[national_mask].copy()
-
-st.sidebar.header("분석 조건")
-st.sidebar.caption("전국 자료를 기준으로 분석합니다.")
-
-sexes = sorted(df["성별"].dropna().astype(str).str.strip().unique().tolist())
-
-selected_sex = st.sidebar.selectbox(
-    "성별 선택",
-    ["전체(남녀 가중평균)"] + sexes,
-)
-
-if selected_sex == "전체(남녀 가중평균)":
-    # 이미 별도로 계산된 전체 행이 있다면 중복 집계를 피합니다.
-    sex_text = df["성별"].astype(str).str.strip()
-    total_mask = sex_text.str.contains(
+# 전체 또는 합계 행 제거
+df = df[
+    ~df["성별"].str.contains(
         r"전체|합계|계",
         regex=True,
+        na=False,
     )
-
-    if total_mask.any():
-        analysis_df = df[total_mask].copy()
-    else:
-        analysis_df = df.copy()
-else:
-    analysis_df = df[
-        df["성별"].astype(str).str.strip() == selected_sex
-    ].copy()
+].copy()
 
 
-if analysis_df.empty:
-    st.error("선택한 조건에 해당하는 데이터가 없습니다.")
+# 성별 데이터 확인
+gender_values = sorted(df["성별"].dropna().unique().tolist())
+
+if len(gender_values) != 2:
+
+    st.error(
+        "성별 데이터가 정확히 2개인지 확인해주세요. "
+        f"현재 확인된 값: {gender_values}"
+    )
+    st.stop()
+
+
+if df.empty:
+    st.error("분석할 데이터가 없습니다.")
     st.stop()
 
 
 # ==========================================
-# 5. 연령대별 평균 계산
+# 6. 연령대별 가중평균 계산
 # ==========================================
 
-# 같은 연령대에 여러 행이 있으면 측정 인원수로 가중 평균
-analysis_df["가중합"] = (
-    analysis_df["측정값 (mg/dL)"] * analysis_df["측정 수 (명)"]
+df["가중합"] = (
+    df["측정값 (mg/dL)"] * df["측정 수 (명)"]
 )
 
-age_data = (
-    analysis_df
-    .groupby(["나이", "대표 나이"], as_index=False)
+age_gender_data = (
+    df.groupby(
+        ["나이", "대표 나이", "성별"],
+        as_index=False
+    )
     .agg(
         가중합=("가중합", "sum"),
-        측정_인원=("측정 수 (명)", "sum"),
+        측정인원=("측정 수 (명)", "sum"),
     )
 )
 
-age_data["혈당 참조값"] = age_data["가중합"] / age_data["측정_인원"]
-age_data = age_data.rename(columns={"측정_인원": "측정 인원"})
-age_data = age_data[["나이", "대표 나이", "혈당 참조값", "측정 인원"]]
-
-age_data = age_data.dropna(
-    subset=["대표 나이", "혈당 참조값"]
-)
-
-age_data = age_data.sort_values("대표 나이").reset_index(drop=True)
-
-if len(age_data) < 2:
-    st.error("회귀분석을 하려면 서로 다른 연령대가 2개 이상 필요합니다.")
-    st.stop()
-
-
-# ==========================================
-# 6. 선형회귀 모델 학습
-# ==========================================
-
-X = age_data[["대표 나이"]]
-y = age_data["혈당 참조값"]
-weights = age_data["측정 인원"]
-
-model = LinearRegression()
-
-model.fit(
-    X,
-    y,
-    sample_weight=weights,
-)
-
-slope = float(model.coef_[0])
-intercept = float(model.intercept_)
-
-# 피어슨 상관계수
-correlation = age_data["대표 나이"].corr(
-    age_data["혈당 참조값"],
-    method="pearson",
-)
-
-r_squared = model.score(
-    X,
-    y,
-    sample_weight=weights,
-)
-
-
-# ==========================================
-# 7. 주요 분석 결과
-# ==========================================
-
-st.subheader("📊 분석 결과")
-
-col1, col2, col3 = st.columns(3)
-
-col1.metric(
-    "상관계수",
-    f"{correlation:.4f}",
-)
-
-col2.metric(
-    "가중 결정계수 R²",
-    f"{r_squared:.4f}",
-)
-
-col3.metric(
-    "분석 연령대 수",
-    f"{len(age_data)}개",
-)
-
-st.markdown("### 선형회귀식")
-
-st.latex(
-    rf"\hat{{y}} = {slope:.4f}x + {intercept:.4f}"
-)
-
-st.caption(
-    "x는 대표 나이, ŷ는 추정 혈당 참조값(mg/dL)입니다. "
-    "회귀 모델은 측정 인원수를 가중치로 사용합니다."
-)
-
-
-# ==========================================
-# 8. 산점도와 회귀 직선
-# ==========================================
-
-st.subheader("📈 나이와 혈당 참조값의 관계")
-
-fig = go.Figure()
-
-# 실제 측정값 산점도
-fig.add_trace(
-    go.Scatter(
-        x=age_data["대표 나이"],
-        y=age_data["혈당 참조값"],
-        mode="markers",
-        name="연령대별 측정값",
-        marker=dict(
-            size=11,
-            opacity=0.8,
-        ),
-        customdata=np.column_stack([
-            age_data["나이"],
-            age_data["측정 인원"],
-        ]),
-        hovertemplate=(
-            "연령대: %{customdata[0]}<br>"
-            "대표 나이: %{x:.1f}세<br>"
-            "혈당 참조값: %{y:.2f} mg/dL<br>"
-            "측정 인원: %{customdata[1]:,.0f}명"
-            "<extra></extra>"
-        ),
-    )
-)
-
-# 회귀 직선
-line_x = np.linspace(
-    age_data["대표 나이"].min(),
-    age_data["대표 나이"].max(),
-    200,
-)
-
-line_y = model.predict(
-    pd.DataFrame({"대표 나이": line_x})
-)
-
-fig.add_trace(
-    go.Scatter(
-        x=line_x,
-        y=line_y,
-        mode="lines",
-        name="선형회귀 직선",
-        line=dict(width=3),
-    )
-)
-
-fig.update_layout(
-    xaxis_title="나이 (세)",
-    yaxis_title="평균 혈당 참조값 (mg/dL)",
-    hovermode="closest",
-    legend_title="그래프 구분",
-    template="plotly_white",
-)
-
-st.plotly_chart(
-    fig,
-    width="stretch",
-)
-
-
-# ==========================================
-# 9. 나이 슬라이더로 혈당값 예측
-# ==========================================
-
-st.subheader("🎚️ 나이별 혈당 참조값 추정")
-
-min_age = float(age_data["대표 나이"].min())
-max_age = float(age_data["대표 나이"].max())
-
-if min_age == max_age:
-    st.error("나이 범위가 하나뿐이어서 슬라이더를 만들 수 없습니다.")
-    st.stop()
-
-selected_age = st.slider(
-    "예측할 나이를 선택하세요.",
-    min_value=min_age,
-    max_value=max_age,
-    value=float((min_age + max_age) / 2),
-    step=0.5,
-    format="%.1f세",
-)
-
-estimated_glucose = float(
-    model.predict(
-        pd.DataFrame({
-            "대표 나이": [selected_age]
-        })
-    )[0]
-)
-
-st.markdown("---")
-
-st.markdown(
-    f"<h3 style='text-align:center;'>"
-    f"{selected_age:.1f}세의 예상 평균 혈당 참조값"
-    f"</h3>",
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    f"""
-    <h1 style="
-        text-align:center;
-        color:#E74C3C;
-        font-size:55px;
-        ">
-        {estimated_glucose:.2f}
-        <span style="font-size:25px;">mg/dL</span>
-    </h1>
-    """,
-    unsafe_allow_html=True,
-)
-
-st.markdown("---")
-
-
-# ==========================================
-# 10. 선택한 나이를 그래프에 표시
-# ==========================================
-
-prediction_fig = go.Figure(fig)
-
-prediction_fig.add_trace(
-    go.Scatter(
-        x=[selected_age],
-        y=[estimated_glucose],
-        mode="markers",
-        name="선택한 나이의 추정값",
-        marker=dict(
-            size=17,
-            symbol="star",
-            color="red",
-        ),
-    )
-)
-
-prediction_fig.update_layout(
-    title=f"{selected_age:.1f}세의 추정 혈당 참조값",
-)
-
-st.plotly_chart(
-    prediction_fig,
-    width="stretch",
-)
-
-
-# ==========================================
-# 11. 연령대별 데이터 표
-# ==========================================
-
-with st.expander("연령대별 분석 데이터 확인"):
-    display_data = age_data.rename(
-        columns={
-            "나이": "연령대",
-            "대표 나이": "대표 나이(세)",
-            "혈당 참조값": "평균 혈당 참조값(mg/dL)",
-            "측정 인원": "측정 인원(명)",
-        }
-    )
-
-    st.dataframe(
-        display_data,
-        width="stretch",
-        hide_index=True,
-    )
-
-
-# ==========================================
-# 12. 분석 해석
-# ==========================================
-
-st.subheader("📝 분석 해석")
-
-if correlation > 0:
-    st.write(
-        "나이가 증가할수록 혈당 참조값이 증가하는 "
-        "양의 상관관계가 관찰됩니다."
-    )
-elif correlation < 0:
-    st.write(
-        "나이가 증가할수록 혈당 참조값이 감소하는 "
-        "음의 상관관계가 관찰됩니다."
-    )
-else:
-    st.write(
-        "나이와 혈당 참조값 사이에 선형 상관관계가 거의 없습니다."
-    )
-
-st.caption(
-    "주의: 상관관계는 인과관계를 의미하지 않습니다. "
-    "이 모델은 연령대별 집단 자료를 이용한 추정이며, "
-    "개인의 실제 혈당이나 공복혈당을 진단하는 도구가 아닙니다. "
-    "지역은 분석 변수에서 제외했으며, 전국 자료를 기준으로 합니다. "
-    "75세 이상 연령대의 대표 나이는 77.5세로 근사했습니다."
-)
+age_gender_data["혈당
